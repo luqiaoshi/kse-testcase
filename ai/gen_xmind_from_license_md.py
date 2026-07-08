@@ -83,7 +83,7 @@ def parse_md(filepath):
                     if m:
                         step_lines.append(m.group(1).strip())
 
-            # Extract expected results - group by top-level - items
+            # Extract expected results - group by top-level items
             expected_section = re.search(r'#### 预期结果\n(.+?)(?=\n#### |\n---|\Z)', cblock, re.DOTALL)
             expected_groups = []  # list of lists: each inner list is one expected group with sub-items
             if expected_section:
@@ -92,11 +92,13 @@ def parse_md(filepath):
                 for line in raw.split('\n'):
                     if not line.strip():
                         continue
-                    # A new group starts with '- ' at the beginning (no leading indent)
-                    if line.startswith('- '):
+                    # A new group starts with '- ' or 'N. ' at the beginning (no leading indent)
+                    if line.startswith('- ') or re.match(r'^\d+\.\s', line):
                         if current_group:
                             expected_groups.append(current_group)
                         current_group = [line.strip().lstrip('- ').strip()]
+                        # Strip leading number if present
+                        current_group[0] = re.sub(r'^\d+\.\s*', '', current_group[0])
                     else:
                         # Continuation of previous group (indented), i.e. sub-items
                         stripped = line.strip()
