@@ -18,8 +18,9 @@ CATEGORY_MAP = {
     "详情": "4. 详情查看",
     "删除": "5. 删除数据",
     "其他": "6. 其他",
+    "其它": "6. 其他",
 }
-CATEGORY_ORDER = ["列表", "创建", "编辑", "详情", "删除", "其他"]
+CATEGORY_ORDER = ["列表", "创建", "编辑", "详情", "删除", "其他", "其它"]
 
 
 def _id(seed=None):
@@ -55,17 +56,48 @@ def parse_md(filepath):
         pc = pc_m.group(1).strip() if pc_m else None
 
         steps = []
-        step_section = False
-        for line in block.splitlines():
-            if '测试步骤 & 预期结果' in line:
-                step_section = True
-                continue
-            if step_section and line.startswith('#'):
-                break
-            if step_section:
+
+        # 1) Inline format: 测试步骤 & 预期结果 with "→"
+        inline_section = re.search(
+            r'### 测试步骤 & 预期结果\n(.+?)(?=\n### |\Z)',
+            block,
+            re.DOTALL,
+        )
+        if inline_section:
+            for line in inline_section.group(1).splitlines():
                 m = re.match(r'\d+\.\s*(.+?)\s*→\s*(.+)', line.strip())
                 if m:
                     steps.append((m.group(1).strip(), m.group(2).strip()))
+
+        # 2) Standard format: separate 测试步骤 and 预期结果 (1:1)
+        if not steps:
+            step_section = re.search(
+                r'### 测试步骤\n(.+?)(?=\n### |\Z)',
+                block,
+                re.DOTALL,
+            )
+            expected_section = re.search(
+                r'### 预期结果\n(.+?)(?=\n### |\Z)',
+                block,
+                re.DOTALL,
+            )
+            if step_section and expected_section:
+                step_lines = []
+                for line in step_section.group(1).splitlines():
+                    m = re.match(r'\d+\.\s*(.+)', line.strip())
+                    if m:
+                        step_lines.append(m.group(1).strip())
+
+                expected_lines = []
+                for line in expected_section.group(1).splitlines():
+                    if line.strip().startswith('- '):
+                        expected_lines.append(line.strip()[2:].strip())
+                    elif re.match(r'^\d+\.\s', line.strip()):
+                        expected_lines.append(re.sub(r'^\d+\.\s*', '', line.strip()))
+
+                for i, step in enumerate(step_lines):
+                    exp = expected_lines[i] if i < len(expected_lines) else ''
+                    steps.append((step, exp))
 
         results.append((title, pc, steps))
     return results
@@ -141,9 +173,24 @@ def generate_xmind(output_path, feature, version, categories):
             print(f"     - {CATEGORY_MAP[cat_key]}: {len(categories[cat_key])} cases")
 
 
+def classify_case(title):
+    """根据用例标题关键词自动分类（用于统一文件 _模块名-测试用例.md）"""
+    if any(k in title for k in ['详情页', '跳转详情']):
+        return '详情'
+    if '列表' in title:
+        return '列表'
+    if any(k in title for k in ['新增', '创建', '邀请', '注册']):
+        return '创建'
+    if any(k in title for k in ['编辑', '修改']):
+        return '编辑'
+    if any(k in title for k in ['删除', '移除']):
+        return '删除'
+    return '其它'
+
+
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Generate XMind from a directory of markdown test cases")
+    parser = argparse.ArgumentParser(description="Generate XMind from a directory of markdown test case files")
     parser.add_argument("input", help="Path to directory containing markdown test case files")
     parser.add_argument("--output", "-o", default=None, help="Output xmind path")
     parser.add_argument("--feature", default=None, help="Feature name (default: directory name)")
@@ -158,11 +205,18 @@ if __name__ == "__main__":
         if not fname.endswith('.md'):
             continue
         cat_key = fname.split('-')[0]
-        if cat_key not in CATEGORY_MAP:
-            continue
         filepath = os.path.join(input_dir, fname)
-        for title, pc, steps in parse_md(filepath):
-            categories.setdefault(cat_key, []).append((title, pc, steps))
+
+        if cat_key in CATEGORY_MAP:
+            # 按文件名前缀分类
+            for title, pc, steps in parse_md(filepath):
+                categories.setdefault(cat_key, []).append((title, pc, steps))
+        elif fname.startswith('_'):
+            # 统一文件 _模块名-测试用例.md：按用例标题关键词分类
+            for title, pc, steps in parse_md(filepath):
+                cat_key = classify_case(title)
+                if cat_key in CATEGORY_MAP:
+                    categories.setdefault(cat_key, []).append((title, pc, steps))
 
     if not categories:
         print("No valid test case files found.")
